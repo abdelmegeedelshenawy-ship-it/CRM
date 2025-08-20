@@ -1,0 +1,181 @@
+version: '3.8'
+
+services:
+  # Database Services
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: crm_platform
+      POSTGRES_USER: crm_user
+      POSTGRES_PASSWORD: crm_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infra/sql:/docker-entrypoint-initdb.d
+    networks:
+      - crm-network
+
+  mongodb:
+    image: mongo:6
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: crm_user
+      MONGO_INITDB_ROOT_PASSWORD: crm_password
+      MONGO_INITDB_DATABASE: crm_documents
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    networks:
+      - crm-network
+
+  # Message Broker
+  rabbitmq:
+    image: rabbitmq:3-management
+    environment:
+      RABBITMQ_DEFAULT_USER: crm_user
+      RABBITMQ_DEFAULT_PASS: crm_password
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    networks:
+      - crm-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - crm-network
+
+  # Core Services
+  auth-service:
+    build: ./services/auth
+    ports:
+      - "8001:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET_KEY=your-secret-key-here
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - crm-network
+
+  client-service:
+    build: ./services/clients
+    ports:
+      - "8002:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - RABBITMQ_URL=amqp://crm_user:crm_password@rabbitmq:5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - crm-network
+
+  deal-service:
+    build: ./services/deals
+    ports:
+      - "8003:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - RABBITMQ_URL=amqp://crm_user:crm_password@rabbitmq:5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - crm-network
+
+  order-service:
+    build: ./services/orders
+    ports:
+      - "8004:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - RABBITMQ_URL=amqp://crm_user:crm_password@rabbitmq:5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - crm-network
+
+  document-service:
+    build: ./services/documents
+    ports:
+      - "8005:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - MONGODB_URL=mongodb://crm_user:crm_password@mongodb:27017/crm_documents
+      - RABBITMQ_URL=amqp://crm_user:crm_password@rabbitmq:5672
+    depends_on:
+      - postgres
+      - mongodb
+      - rabbitmq
+    networks:
+      - crm-network
+
+  user-service:
+    build: ./services/users
+    ports:
+      - "8006:5000"
+    environment:
+      - DATABASE_URL=postgresql://crm_user:crm_password@postgres:5432/crm_platform
+      - RABBITMQ_URL=amqp://crm_user:crm_password@rabbitmq:5672
+    depends_on:
+      - postgres
+      - rabbitmq
+    networks:
+      - crm-network
+
+  # API Gateway
+  api-gateway:
+    build: ./gateway
+    ports:
+      - "8000:5000"
+    environment:
+      - AUTH_SERVICE_URL=http://auth-service:5000
+      - CLIENT_SERVICE_URL=http://client-service:5000
+      - DEAL_SERVICE_URL=http://deal-service:5000
+      - ORDER_SERVICE_URL=http://order-service:5000
+      - DOCUMENT_SERVICE_URL=http://document-service:5000
+      - USER_SERVICE_URL=http://user-service:5000
+    depends_on:
+      - auth-service
+      - client-service
+      - deal-service
+      - order-service
+      - document-service
+      - user-service
+    networks:
+      - crm-network
+
+  # Frontend
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    depends_on:
+      - api-gateway
+    networks:
+      - crm-network
+
+volumes:
+  postgres_data:
+  mongodb_data:
+  rabbitmq_data:
+  redis_data:
+
+networks:
+  crm-network:
+    driver: bridge
+
